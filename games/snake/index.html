@@ -1,0 +1,194 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Snake</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0e0f1a; color: #fff; overflow: hidden;
+    font-family: system-ui, sans-serif; user-select: none; touch-action: none; }
+  #app { display: flex; height: 100%; align-items: center; justify-content: center; gap: 48px; }
+  #side { display: flex; flex-direction: column; gap: 28px; width: 360px; }
+  .btn { background: #262a44; border: none; color: #fff; border-radius: 22px; font-size: 32px;
+    font-weight: 700; padding: 22px; touch-action: manipulation; }
+  .btn:active { background: #3a4070; }
+  .stat { font-size: 30px; opacity: .7; }
+  .stat b { display: block; font-size: 72px; opacity: 1; color: #7dff8a; }
+  #pad { display: grid; grid-template-columns: repeat(3, 110px); grid-template-rows: repeat(3, 110px);
+    gap: 10px; margin-top: 12px; }
+  #pad button { font-size: 48px; border-radius: 26px; padding: 0; }
+  #wrap { position: relative; }
+  canvas { display: block; background: #151829; border-radius: 24px; box-shadow: 0 10px 40px #0009; }
+  #overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 28px; background: #0e0f1acc; border-radius: 24px; text-align: center; }
+  #overlay h1 { font-size: 96px; margin: 0; color: #7dff8a; }
+  #overlay p { font-size: 34px; margin: 0; opacity: .85; }
+  #overlay .btn { font-size: 44px; padding: 26px 64px; background: #2fbf4a; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="wrap">
+    <canvas id="board"></canvas>
+    <div id="overlay">
+      <h1 id="title">SNAKE</h1>
+      <p id="msg">Swipe anywhere or use the arrows to steer</p>
+      <button class="btn" id="play">Play</button>
+    </div>
+  </div>
+  <div id="side">
+    <button class="btn" id="home">⌂ Home</button>
+    <div class="stat">Score<b id="score">0</b></div>
+    <div class="stat">Best<b id="best">0</b></div>
+    <div id="pad">
+      <span></span><button class="btn" data-d="up">▲</button><span></span>
+      <button class="btn" data-d="left">◀</button><button class="btn" id="pause">❚❚</button><button class="btn" data-d="right">▶</button>
+      <span></span><button class="btn" data-d="down">▼</button><span></span>
+    </div>
+  </div>
+</div>
+<script>
+const COLS = 24, ROWS = 24;
+const DIRS = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+const canvas = document.getElementById('board'), ctx = canvas.getContext('2d');
+const $ = id => document.getElementById(id);
+
+let cell, snake, dir, queue, food, score, running, paused, stepMs, lastStep;
+let best = 0;
+try { best = +localStorage.getItem('snake-best') || 0; } catch (e) {}
+$('best').textContent = best;
+
+function resize() {
+  const size = Math.min(innerHeight - 80, innerWidth - 500);
+  cell = Math.floor(size / COLS);
+  canvas.width = cell * COLS; canvas.height = cell * ROWS;
+  draw();
+}
+
+function reset() {
+  snake = [[12, 12], [11, 12], [10, 12]];
+  dir = 'right'; queue = []; score = 0; stepMs = 140; paused = false;
+  $('score').textContent = 0;
+  placeFood();
+}
+
+function placeFood() {
+  do { food = [Math.floor(Math.random() * COLS), Math.floor(Math.random() * ROWS)]; }
+  while (snake.some(([x, y]) => x === food[0] && y === food[1]));
+}
+
+function turn(d) {
+  if (!running) return;
+  const last = queue.length ? queue[queue.length - 1] : dir;
+  const [lx, ly] = DIRS[last], [nx, ny] = DIRS[d];
+  if (lx + nx === 0 && ly + ny === 0) return; // no reversing into yourself
+  if (d !== last && queue.length < 3) queue.push(d);
+}
+
+function step() {
+  if (queue.length) dir = queue.shift();
+  const [dx, dy] = DIRS[dir];
+  const head = [snake[0][0] + dx, snake[0][1] + dy];
+  const ate = head[0] === food[0] && head[1] === food[1];
+  const body = ate ? snake : snake.slice(0, -1);
+  if (head[0] < 0 || head[1] < 0 || head[0] >= COLS || head[1] >= ROWS ||
+      body.some(([x, y]) => x === head[0] && y === head[1])) return gameOver();
+  snake.unshift(head);
+  if (ate) {
+    score++; $('score').textContent = score;
+    stepMs = Math.max(60, stepMs - 3);
+    beep(660, 0.06);
+    placeFood();
+  } else snake.pop();
+}
+
+function gameOver() {
+  running = false;
+  beep(160, 0.4, 'sawtooth');
+  if (score > best) {
+    best = score; $('best').textContent = best;
+    try { localStorage.setItem('snake-best', best); } catch (e) {}
+  }
+  $('title').textContent = 'GAME OVER';
+  $('msg').textContent = `Score: ${score}` + (score === best && score > 0 ? '  New best!' : '');
+  $('play').textContent = 'Play again';
+  $('overlay').hidden = false;
+}
+
+function start() {
+  reset(); running = true; lastStep = performance.now();
+  $('overlay').hidden = true;
+}
+
+function loop(t) {
+  if (running && !paused && t - lastStep >= stepMs) { lastStep = t; step(); }
+  draw();
+  requestAnimationFrame(loop);
+}
+
+function draw() {
+  if (!snake) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#1a1e33';
+  for (let x = 0; x < COLS; x++) for (let y = 0; y < ROWS; y++)
+    if ((x + y) % 2) ctx.fillRect(x * cell, y * cell, cell, cell);
+  ctx.fillStyle = '#ff4d6d';
+  ctx.beginPath();
+  ctx.arc((food[0] + .5) * cell, (food[1] + .5) * cell, cell * .4, 0, Math.PI * 2);
+  ctx.fill();
+  snake.forEach(([x, y], i) => {
+    ctx.fillStyle = i === 0 ? '#b6ffbd' : `hsl(${130 - Math.min(i, 40)}, 80%, ${60 - Math.min(i, 30) * .6}%)`;
+    const p = cell * .08;
+    ctx.beginPath();
+    ctx.roundRect(x * cell + p, y * cell + p, cell - 2 * p, cell - 2 * p, cell * .25);
+    ctx.fill();
+  });
+  if (paused) {
+    ctx.fillStyle = '#0009'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#fff'; ctx.font = `bold ${cell * 2.5}px system-ui`; ctx.textAlign = 'center';
+    ctx.fillText('PAUSED', canvas.width / 2, canvas.height / 2);
+  }
+}
+
+let audio;
+function beep(freq, dur, type = 'square') {
+  try {
+    audio = audio || new AudioContext();
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.08, audio.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + dur);
+    o.connect(g).connect(audio.destination); o.start(); o.stop(audio.currentTime + dur);
+  } catch (e) {}
+}
+
+// Swipe anywhere on the screen to steer
+let touchStart = null;
+addEventListener('pointerdown', e => { touchStart = [e.clientX, e.clientY]; });
+addEventListener('pointermove', e => {
+  if (!touchStart) return;
+  const dx = e.clientX - touchStart[0], dy = e.clientY - touchStart[1];
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < 40) return;
+  turn(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
+  touchStart = [e.clientX, e.clientY];
+});
+addEventListener('pointerup', () => { touchStart = null; });
+
+document.querySelectorAll('[data-d]').forEach(b =>
+  b.addEventListener('pointerdown', e => { e.stopPropagation(); turn(b.dataset.d); }));
+addEventListener('keydown', e => {
+  const k = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' }[e.key];
+  if (k) turn(k);
+  if (e.key === ' ' && running) paused = !paused;
+});
+$('pause').onclick = () => { if (running) paused = !paused; };
+$('play').onclick = start;
+$('home').onclick = () => location.href = '/launcher/';
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+addEventListener('resize', resize);
+reset(); resize(); requestAnimationFrame(loop);
+</script>
+</body>
+</html>

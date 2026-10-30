@@ -1,1 +1,3 @@
-[]
+[
+  { "title": "Snake", "folder": "snake", "subtitle": "Swipe to steer", "colors": ["#1fa64a", "#0c5d3a"] }
+]
