@@ -1,0 +1,305 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Air Hockey</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0e0f1a; color: #fff; overflow: hidden;
+    font-family: system-ui, sans-serif; user-select: none; touch-action: none; }
+  canvas { position: absolute; inset: 0; display: block; }
+  .btn { background: #262a44; border: none; color: #fff; border-radius: 22px; font-size: 32px;
+    font-weight: 700; padding: 22px 40px; touch-action: manipulation; }
+  .btn:active { filter: brightness(1.3); }
+  #pause { position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+    padding: 10px 26px; font-size: 26px; border-radius: 18px; background: #262a44cc; }
+  #overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 30px; background: #0e0f1acc; text-align: center; }
+  #overlay h1 { font-size: 104px; margin: 0; }
+  #overlay p { font-size: 34px; margin: 0; opacity: .85; max-width: 1100px; }
+  #overlay .row { display: flex; gap: 28px; }
+  #overlay .big { font-size: 44px; padding: 26px 64px; background: #2fbf4a; }
+  #touches { font-size: 24px; opacity: .6; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<button class="btn" id="pause" hidden>❚❚</button>
+<div id="overlay">
+  <h1 id="title"><span style="color:#ff5c7a">AIR</span> <span style="color:#4dc3ff">HOCKEY</span></h1>
+  <p id="msg">One player on each side. Drag your paddle to hit the puck into the other goal. First to 7 wins!</p>
+  <div class="row">
+    <button class="btn big" id="play2">2 Players</button>
+    <button class="btn big" id="play1" style="background:#3a4070">1 Player vs CPU</button>
+  </div>
+  <div class="row">
+    <button class="btn" id="resume" hidden>Resume</button>
+    <button class="btn" id="home">⌂ Home</button>
+  </div>
+  <div id="touches">Touch test: put fingers anywhere. Fingers detected: <b id="tcount">0</b> (most at once: <b id="tmax">0</b>)</div>
+</div>
+<script>
+// World is a fixed 1600x900 rink, scaled to fit the screen.
+const W = 1600, H = 900, GOAL = 300, PUCK_R = 28, MALLET_R = 56, WIN = 7;
+const PUCK_MAX = 2800, MALLET_MAX = 4200, FRICTION = 0.55, BOUNCE = 0.92;
+const COLORS = ['#ff5c7a', '#4dc3ff'];
+const canvas = document.getElementById('c'), ctx = canvas.getContext('2d');
+const $ = id => document.getElementById(id);
+
+let scale = 1, offX = 0, offY = 0, dpr = 1;
+let puck, mallets, score, state = 'menu', cpu = false, serveAt = 0, flash = 0;
+
+function resize() {
+  dpr = devicePixelRatio || 1;
+  canvas.width = innerWidth * dpr; canvas.height = innerHeight * dpr;
+  canvas.style.width = innerWidth + 'px'; canvas.style.height = innerHeight + 'px';
+  scale = Math.min(innerWidth / W, innerHeight / H);
+  offX = (innerWidth - W * scale) / 2; offY = (innerHeight - H * scale) / 2;
+}
+
+function newMallet(side) {
+  const x = side ? W * 0.82 : W * 0.18;
+  return { side, x, y: H / 2, tx: x, ty: H / 2, vx: 0, vy: 0, owner: null };
+}
+
+function serve(toSide) {
+  // Puck starts on the side of the player who was just scored on
+  puck = { x: toSide ? W * 0.62 : W * 0.38, y: H / 2, vx: 0, vy: 0 };
+  serveAt = performance.now() + 900;
+}
+
+function start(withCpu) {
+  cpu = withCpu;
+  score = [0, 0];
+  mallets = [newMallet(0), newMallet(1)];
+  serve(Math.random() < .5 ? 0 : 1);
+  state = 'play';
+  $('overlay').hidden = true; $('pause').hidden = false;
+}
+
+function setPaused(p) {
+  if (state === 'menu') return;
+  state = p ? 'paused' : 'play';
+  $('overlay').hidden = !p; $('pause').hidden = p;
+  $('resume').hidden = !p;
+  if (p) {
+    $('title').innerHTML = 'PAUSED';
+    $('msg').textContent = `${score[0]} : ${score[1]}`;
+  }
+}
+
+function gameOver(winner) {
+  state = 'menu';
+  $('pause').hidden = true; $('resume').hidden = true;
+  const name = cpu ? (winner ? 'CPU wins' : 'You win!') : (winner ? 'BLUE wins!' : 'RED wins!');
+  $('title').innerHTML = `<span style="color:${COLORS[winner]}">${name}</span>`;
+  $('msg').textContent = `${score[0]} : ${score[1]}`;
+  $('play2').textContent = '2 Players again'; $('play1').textContent = '1 Player vs CPU';
+  $('overlay').hidden = false;
+  beep(523, .15); setTimeout(() => beep(659, .15), 160); setTimeout(() => beep(784, .35), 320);
+}
+
+// ---- Multi-touch: every pointer is tracked by its id, and each half of the screen
+// is owned by the most recent finger that landed on it.
+const active = new Set();
+let maxTouches = 0;
+function toWorld(e) { return [(e.clientX - offX) / scale, (e.clientY - offY) / scale]; }
+
+addEventListener('pointerdown', e => {
+  active.add(e.pointerId);
+  maxTouches = Math.max(maxTouches, active.size);
+  $('tcount').textContent = active.size; $('tmax').textContent = maxTouches;
+  if (state !== 'play' || e.target.closest('button')) return;
+  const [x, y] = toWorld(e), side = x < W / 2 ? 0 : 1;
+  if (cpu && side === 1) return;
+  const m = mallets[side];
+  m.owner = e.pointerId; m.tx = x; m.ty = y;
+});
+addEventListener('pointermove', e => {
+  if (state !== 'play') return;
+  for (const m of mallets) if (m.owner === e.pointerId) [m.tx, m.ty] = toWorld(e);
+});
+function lift(e) {
+  active.delete(e.pointerId);
+  $('tcount').textContent = active.size;
+  if (mallets) for (const m of mallets) if (m.owner === e.pointerId) m.owner = null;
+}
+addEventListener('pointerup', lift);
+addEventListener('pointercancel', lift);
+
+function cpuThink() {
+  const m = mallets[1];
+  const home = W - 140;
+  if (puck.x > W / 2 - 40 && (puck.vx > -300 || puck.x > m.x - 40)) {
+    // Attack: get behind the puck (relative to the left goal), then drive through it
+    let dx = 0 - puck.x, dy = H / 2 - puck.y;
+    const d = Math.hypot(dx, dy); dx /= d; dy /= d;
+    const behind = (m.x - puck.x) * dx + (m.y - puck.y) * dy < -20;
+    const k = behind ? 60 : -(PUCK_R + MALLET_R + 20);
+    m.tx = puck.x + dx * k; m.ty = puck.y + dy * k;
+  } else {
+    m.tx = home; m.ty = H / 2 + (puck.y - H / 2) * .6;
+  }
+}
+
+function moveMallet(m, dt) {
+  // Mallet chases the finger with a speed cap, so a finger placed far away
+  // doesn't teleport the mallet through the puck.
+  const minX = m.side ? W / 2 + MALLET_R : MALLET_R, maxX = m.side ? W - MALLET_R : W / 2 - MALLET_R;
+  const tx = Math.min(maxX, Math.max(minX, m.tx)), ty = Math.min(H - MALLET_R, Math.max(MALLET_R, m.ty));
+  let dx = tx - m.x, dy = ty - m.y;
+  const d = Math.hypot(dx, dy), maxStep = (cpu && m.side ? 1500 : MALLET_MAX) * dt;
+  if (d > maxStep) { dx *= maxStep / d; dy *= maxStep / d; }
+  m.vx = dx / dt; m.vy = dy / dt;
+  m.x += dx; m.y += dy;
+}
+
+function hitMallet(m) {
+  const dx = puck.x - m.x, dy = puck.y - m.y, d = Math.hypot(dx, dy), min = PUCK_R + MALLET_R;
+  if (d >= min || d === 0) return;
+  const nx = dx / d, ny = dy / d;
+  puck.x = m.x + nx * min; puck.y = m.y + ny * min;
+  const vn = (puck.vx - m.vx) * nx + (puck.vy - m.vy) * ny;
+  if (vn < 0) {
+    puck.vx -= (1 + BOUNCE) * vn * nx; puck.vy -= (1 + BOUNCE) * vn * ny;
+    beep(300 + Math.min(500, -vn / 6), .05, 'triangle');
+  }
+}
+
+function step(dt) {
+  for (const m of mallets) moveMallet(m, dt);
+  if (performance.now() < serveAt) { for (const m of mallets) hitMallet(m); puck.vx = puck.vy = 0; return; }
+
+  puck.x += puck.vx * dt; puck.y += puck.vy * dt;
+  const f = Math.exp(-FRICTION * dt); puck.vx *= f; puck.vy *= f;
+
+  if (puck.y < PUCK_R) { puck.y = PUCK_R; puck.vy = Math.abs(puck.vy) * BOUNCE; wallSound(); }
+  if (puck.y > H - PUCK_R) { puck.y = H - PUCK_R; puck.vy = -Math.abs(puck.vy) * BOUNCE; wallSound(); }
+  const inMouth = Math.abs(puck.y - H / 2) < GOAL / 2 - PUCK_R * .3;
+  if (!inMouth) {
+    if (puck.x < PUCK_R) { puck.x = PUCK_R; puck.vx = Math.abs(puck.vx) * BOUNCE; wallSound(); }
+    if (puck.x > W - PUCK_R) { puck.x = W - PUCK_R; puck.vx = -Math.abs(puck.vx) * BOUNCE; wallSound(); }
+  } else if (puck.x < -PUCK_R) return goal(1);
+  else if (puck.x > W + PUCK_R) return goal(0);
+
+  for (const m of mallets) hitMallet(m);
+
+  const sp = Math.hypot(puck.vx, puck.vy);
+  if (sp > PUCK_MAX) { puck.vx *= PUCK_MAX / sp; puck.vy *= PUCK_MAX / sp; }
+}
+
+let lastWall = 0;
+function wallSound() { const t = performance.now(); if (t - lastWall > 60) { lastWall = t; beep(180, .04, 'triangle'); } }
+
+function goal(scorer) {
+  score[scorer]++;
+  flash = performance.now(); flashSide = scorer;
+  beep(scorer ? 440 : 392, .12); setTimeout(() => beep(scorer ? 660 : 587, .25), 130);
+  if (score[scorer] >= WIN) return gameOver(scorer);
+  serve(1 - scorer);
+}
+let flashSide = 0;
+
+let last = performance.now();
+function loop(t) {
+  const dt = Math.min(0.05, (t - last) / 1000); last = t;
+  if (state === 'play') {
+    if (cpu) cpuThink();
+    const n = 8; // substeps keep fast pucks from passing through mallets
+    for (let i = 0; i < n && state === 'play'; i++) step(dt / n);
+  }
+  draw(t);
+  requestAnimationFrame(loop);
+}
+
+function draw(t) {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#0e0f1a'; ctx.fillRect(0, 0, innerWidth, innerHeight);
+  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * offX, dpr * offY);
+
+  // Rink halves
+  ctx.fillStyle = '#1d1424'; ctx.fillRect(0, 0, W / 2, H);
+  ctx.fillStyle = '#121b2c'; ctx.fillRect(W / 2, 0, W / 2, H);
+  if (t - flash < 600) {
+    ctx.globalAlpha = .35 * (1 - (t - flash) / 600);
+    ctx.fillStyle = COLORS[flashSide]; ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = 1;
+  }
+
+  // Big scores in the background
+  if (score) {
+    ctx.font = 'bold 300px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ff5c7a22'; ctx.fillText(score[0], W / 4, H / 2 + 10);
+    ctx.fillStyle = '#4dc3ff22'; ctx.fillText(score[1], W * 3 / 4, H / 2 + 10);
+  }
+
+  // Markings
+  ctx.lineWidth = 6; ctx.strokeStyle = '#ffffff30';
+  ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke();
+  ctx.beginPath(); ctx.arc(W / 2, H / 2, 120, 0, Math.PI * 2); ctx.stroke();
+  for (const s of [0, 1]) {
+    ctx.strokeStyle = COLORS[s] + '60';
+    ctx.beginPath(); ctx.arc(s ? W : 0, H / 2, GOAL / 2 + 60, -Math.PI / 2, Math.PI / 2, s === 1); ctx.stroke();
+  }
+  // Walls and goal mouths
+  ctx.lineWidth = 14; ctx.strokeStyle = '#ffffffaa';
+  ctx.strokeRect(0, 0, W, H);
+  ctx.lineWidth = 18;
+  for (const s of [0, 1]) {
+    ctx.strokeStyle = COLORS[s];
+    ctx.beginPath(); ctx.moveTo(s ? W : 0, H / 2 - GOAL / 2); ctx.lineTo(s ? W : 0, H / 2 + GOAL / 2); ctx.stroke();
+  }
+
+  if (!puck) return;
+
+  // Puck
+  const serving = state === 'play' && performance.now() < serveAt;
+  ctx.fillStyle = serving && Math.floor(t / 120) % 2 ? '#ffffff88' : '#f4f4f4';
+  ctx.beginPath(); ctx.arc(puck.x, puck.y, PUCK_R, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#00000030';
+  ctx.beginPath(); ctx.arc(puck.x, puck.y, PUCK_R * .55, 0, Math.PI * 2); ctx.fill();
+
+  // Mallets
+  for (const m of mallets) {
+    ctx.fillStyle = COLORS[m.side];
+    ctx.shadowColor = COLORS[m.side]; ctx.shadowBlur = m.owner !== null ? 40 : 10;
+    ctx.beginPath(); ctx.arc(m.x, m.y, MALLET_R, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#ffffff55';
+    ctx.beginPath(); ctx.arc(m.x, m.y, MALLET_R * .45, 0, Math.PI * 2); ctx.fill();
+  }
+  if (cpu) {
+    ctx.font = 'bold 40px system-ui'; ctx.fillStyle = '#4dc3ff66'; ctx.textAlign = 'center';
+    ctx.fillText('CPU', W * 3 / 4, 60);
+  }
+}
+
+let audio;
+function beep(freq, dur, type = 'square') {
+  try {
+    audio = audio || new AudioContext();
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.08, audio.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + dur);
+    o.connect(g).connect(audio.destination); o.start(); o.stop(audio.currentTime + dur);
+  } catch (e) {}
+}
+
+$('play2').onclick = () => start(false);
+$('play1').onclick = () => start(true);
+$('pause').onclick = () => setPaused(true);
+$('resume').onclick = () => setPaused(false);
+$('home').onclick = () => location.href = '/launcher/';
+addEventListener('keydown', e => { if (e.key === 'Escape' || e.key === ' ') setPaused(state === 'play'); });
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+addEventListener('resize', resize);
+resize();
+mallets = [newMallet(0), newMallet(1)];
+puck = { x: W / 2, y: H / 2, vx: 0, vy: 0 };
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

@@ -1,3 +1,4 @@
 [
-  { "title": "Snake", "folder": "snake", "subtitle": "Swipe to steer", "colors": ["#1fa64a", "#0c5d3a"] }
+  { "title": "Snake", "folder": "snake", "subtitle": "Swipe to steer", "colors": ["#1fa64a", "#0c5d3a"] },
+  { "title": "Air Hockey", "folder": "hockey", "subtitle": "2 players, one screen", "colors": ["#ff5c7a", "#3a7bff"] }
 ]
