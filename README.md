@@ -8,7 +8,13 @@ A touch screen game console for an HP 24-f0024 All-in-One. It boots Debian strai
 2. Log in and run:
 
    ```
-   su -c "apt-get install -y curl && curl -fsSL https://raw.githubusercontent.com/t22admin/game-console/main/setup.sh | bash"
+   wget -qO- https://raw.githubusercontent.com/t22admin/game-console/main/setup.sh | sudo bash
+   ```
+
+   (If you set a root password during install, `sudo` won't exist; use this instead:)
+
+   ```
+   wget -qO- https://raw.githubusercontent.com/t22admin/game-console/main/setup.sh | su -c bash
    ```
 
 3. It reboots into the console. Each boot pulls the latest games from this repo.
