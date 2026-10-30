@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Game Console</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0e0f1a; color: #fff;
+    font-family: system-ui, sans-serif; user-select: none; touch-action: manipulation; overflow: hidden; }
+  header { padding: 40px 56px 0; font-size: 56px; font-weight: 800; letter-spacing: 1px; }
+  #clock { float: right; font-size: 40px; font-weight: 400; opacity: .7; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 32px; padding: 40px 56px; }
+  .tile { height: 260px; border-radius: 28px; display: flex; flex-direction: column;
+    justify-content: flex-end; padding: 24px; box-sizing: border-box; font-size: 36px; font-weight: 700;
+    background: linear-gradient(135deg, var(--c1, #5b6cff), var(--c2, #9b4dff));
+    background-size: cover; background-position: center; box-shadow: 0 10px 30px #0008;
+    transition: transform .12s; }
+  .tile:active { transform: scale(.95); }
+  .tile small { font-size: 22px; font-weight: 400; opacity: .85; }
+  #empty { padding: 120px 56px; font-size: 40px; opacity: .6; text-align: center; }
+</style>
+</head>
+<body>
+<header>Game Console <span id="clock"></span></header>
+<div id="grid"></div>
+<div id="empty" hidden>No games yet. Ask Claude to make one!</div>
+<script>
+  // Each entry in /games/games.json: { "title", "folder", "subtitle"?, "icon"?, "colors"?: [c1, c2] }
+  fetch('/games/games.json', { cache: 'no-store' })
+    .then(r => r.json())
+    .then(games => {
+      const grid = document.getElementById('grid');
+      if (!games.length) document.getElementById('empty').hidden = false;
+      for (const g of games) {
+        const t = document.createElement('div');
+        t.className = 'tile';
+        if (g.colors) { t.style.setProperty('--c1', g.colors[0]); t.style.setProperty('--c2', g.colors[1]); }
+        if (g.icon) t.style.backgroundImage = `url(/games/${g.folder}/${g.icon})`;
+        t.innerHTML = `${g.title}${g.subtitle ? `<small>${g.subtitle}</small>` : ''}`;
+        t.onclick = () => location.href = `/games/${g.folder}/`;
+        grid.appendChild(t);
+      }
+    })
+    .catch(() => document.getElementById('empty').hidden = false);
+
+  const clock = document.getElementById('clock');
+  const tick = () => clock.textContent = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  tick(); setInterval(tick, 10000);
+  document.addEventListener('contextmenu', e => e.preventDefault());
+</script>
+</body>
+</html>
